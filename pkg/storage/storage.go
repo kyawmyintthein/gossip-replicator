@@ -12,13 +12,26 @@ import (
 
 type (
 	V struct {
-		Data      []byte `json:"data"`
-		Version   int    `json:"version"`
-		IsDeleted bool   `json:"is_deleted"`
+		ID         string `json:"id"`
+		ActionName string `json:"action_name"`
+		Data       []byte `json:"data"`
+		Meta       Meta   `json:"meta"`
+	}
+
+	Meta struct {
+		Version         int           `json:"version"`
+		SVCCode         string        `json:"svc_code"`
+		SourceRegion    int           `json:"source_region"`
+		CommitedRegions map[uint]bool `json:"commited_region"`
+		ToDelete        bool          `json:"to_delete"`
 	}
 
 	InMemoryStorage struct {
 		mu sync.Mutex
+
+		regionID uint
+
+		numberOfRegions uint
 
 		// useful to share node details with other nodes
 		metadata map[string]string
@@ -28,14 +41,18 @@ type (
 	}
 )
 
-func NewInMemoryDB(md map[string]string) *InMemoryStorage {
-	db, err := badger.Open(badger.DefaultOptions("").WithInMemory(true))
+func NewInMemoryDB(md map[string]string, regionID uint, numberOfRegions uint) *InMemoryStorage {
+	opts := badger.DefaultOptions("")
+	opts = opts.WithInMemory(true)
+	db, err := badger.Open(opts)
 	if err != nil {
 		log.Fatal(err)
 	}
 	return &InMemoryStorage{
-		metadata: md,
-		db:       db,
+		metadata:        md,
+		regionID:        regionID,
+		numberOfRegions: numberOfRegions,
+		db:              db,
 	}
 }
 
@@ -133,7 +150,37 @@ func (c *InMemoryStorage) MergeRemoteState(buf []byte, join bool) {
 		log.Fatal("failed to decode remote state", err)
 	}
 
-	log.Println("Received Data from Remote", data)
+	log.Println("Received Data from Remote", c.regionID, data)
+	if len(data) == 0 {
+		err := c.db.View(func(txn *badger.Txn) error {
+			opts := badger.DefaultIteratorOptions
+			opts.PrefetchValues = false
+			it := txn.NewIterator(opts)
+			defer it.Close()
+			for it.Rewind(); it.Valid(); it.Next() {
+				item := it.Item()
+				var v V
+				err := item.Value(func(val []byte) error {
+					json.Unmarshal(val, &v)
+					return nil
+				})
+				if err != nil {
+					return nil
+				}
+				if v.Meta.ToDelete {
+					err = c.Del(v.ID)
+					if err != nil {
+						log.Println("delete failed", err)
+					}
+					continue
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Fatal("failed to encode local state", err)
+		}
+	}
 	for key, value := range data {
 		var vin V
 		log.Println("Remote data", key, string(value))
@@ -143,6 +190,14 @@ func (c *InMemoryStorage) MergeRemoteState(buf []byte, join bool) {
 			continue
 		}
 
+		if vin.Meta.ToDelete {
+			err = c.Del(key)
+			if err != nil {
+				log.Println("delete failed", err)
+			}
+			log.Println("deleted ", c.regionID)
+			continue
+		}
 		err := c.db.View(func(txn *badger.Txn) error {
 			item, err := txn.Get([]byte(key))
 			if err != nil {
@@ -152,6 +207,7 @@ func (c *InMemoryStorage) MergeRemoteState(buf []byte, join bool) {
 					err = c.Put(key, value)
 					if err != nil {
 						log.Println("put storage error", err, key, string(value))
+
 						return err
 					}
 					return nil
@@ -168,14 +224,18 @@ func (c *InMemoryStorage) MergeRemoteState(buf []byte, join bool) {
 				return nil
 			})
 
-			if vin.Version > vexit.Version {
-				log.Println("greater verstion", key, string(value))
-				return c.Put(key, value)
-			}
-
-			if vin.Version == vexit.Version && (vin.IsDeleted && vexit.IsDeleted) {
-				c.Del(key)
-				log.Println("same version and deleted", key, string(value))
+			if vin.Meta.Version >= vexit.Meta.Version {
+				vin.Meta.CommitedRegions[c.regionID] = true
+				if len(vin.Meta.CommitedRegions) >= int(c.numberOfRegions) {
+					vin.Meta.ToDelete = true
+				}
+				commitedV, _ := json.Marshal(vin)
+				err = c.Put(key, commitedV)
+				if err != nil {
+					log.Println("failed to save in storage", err, key)
+					return err
+				}
+				log.Println("Successfully sync", key, commitedV)
 			}
 			return nil
 		})
@@ -218,7 +278,7 @@ func (c *InMemoryStorage) Get(key string) ([]byte, error) {
 
 // Get returns a property value
 func (c *InMemoryStorage) Del(key string) error {
-	err := c.db.View(func(txn *badger.Txn) error {
+	err := c.db.Update(func(txn *badger.Txn) error {
 		err := txn.Delete([]byte(key))
 		if err != nil {
 			return err

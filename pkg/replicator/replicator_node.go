@@ -31,10 +31,13 @@ type Node struct {
 	memberConfig *memberlist.Config
 	memberlist   *memberlist.Memberlist
 
+	regionID        uint
+	numberOfRegions uint
+
 	httpServer *http.Server
 }
 
-func NewNode(name string, addr string, apiPort, gossipPort int, clusterNodeAddr string) *Node {
+func NewNode(name string, regionID uint, numberOfRegions uint, addr string, apiPort, gossipPort int, clusterNodeAddr string) *Node {
 	config := memberlist.DefaultLocalConfig()
 	config.Name = name
 	config.BindAddr = addr
@@ -44,7 +47,7 @@ func NewNode(name string, addr string, apiPort, gossipPort int, clusterNodeAddr 
 	md := make(map[string]string, 1)
 	md["apiPort"] = strconv.Itoa(apiPort)
 
-	backendStorage := storage.NewInMemoryDB(md)
+	backendStorage := storage.NewInMemoryDB(md, regionID, numberOfRegions)
 	config.Delegate = backendStorage
 
 	return &Node{
@@ -53,16 +56,28 @@ func NewNode(name string, addr string, apiPort, gossipPort int, clusterNodeAddr 
 		clusterNodeAddr: clusterNodeAddr,
 		storage:         backendStorage,
 		memberConfig:    config,
+		regionID:        regionID,
+		numberOfRegions: numberOfRegions,
 	}
 }
 
 // Put adds config to the local store
 func (n *Node) Put(ctx context.Context, req *rpc.PutEventRequest) (*rpc.Event, error) {
-	key := req.GetKey()
+	key := req.Id
+	regions := make(map[uint]bool)
+	regions[n.regionID] = true
+	meta := storage.Meta{
+		Version:         int(req.Version),
+		SourceRegion:    int(req.SourceRegion),
+		SVCCode:         req.ServiceCode,
+		CommitedRegions: regions,
+	}
+
 	v := storage.V{
-		Data:      []byte(req.Data),
-		Version:   int(req.Version),
-		IsDeleted: req.Deleted,
+		ID:         req.Id,
+		ActionName: req.ActionName,
+		Data:       []byte(req.Data),
+		Meta:       meta,
 	}
 
 	val, err := json.Marshal(v)
@@ -75,14 +90,29 @@ func (n *Node) Put(ctx context.Context, req *rpc.PutEventRequest) (*rpc.Event, e
 	if err != nil {
 		return nil, err
 	}
-	log.Println("succesfully put config", req.GetKey(), v)
+	log.Println("succesfully put config", req.Id, v)
 
-	return &rpc.Event{Key: key, Version: int32(v.Version), Data: string(v.Data), Deleted: v.IsDeleted}, nil
+	var commitedRegions []*rpc.Pair
+	for k, v := range meta.CommitedRegions {
+		pair := &rpc.Pair{
+			Key:   int32(k),
+			Value: v,
+		}
+		commitedRegions = append(commitedRegions, pair)
+	}
+	return &rpc.Event{Id: key, Data: string(v.Data),
+		ActionName: v.ActionName,
+		Meta: &rpc.Meta{
+			Version:         int32(meta.Version),
+			SourceRegion:    int32(meta.SourceRegion),
+			ServiceCode:     meta.SVCCode,
+			CommitedRegions: &rpc.Dictionary{Pairs: commitedRegions},
+		}}, nil
 }
 
 // Get fetches config from the local store
 func (n *Node) Get(ctx context.Context, req *rpc.GetEventRequest) (*rpc.Event, error) {
-	key := req.GetKey()
+	key := req.Id
 	b, err := n.storage.Get(key)
 	if err != nil {
 		log.Println("failed to get from storage", key, err)
@@ -95,7 +125,23 @@ func (n *Node) Get(ctx context.Context, req *rpc.GetEventRequest) (*rpc.Event, e
 		log.Println("failed to marshal from storage", key, err)
 		return nil, err
 	}
-	return &rpc.Event{Key: key, Version: int32(v.Version), Data: string(v.Data), Deleted: v.IsDeleted}, nil
+
+	var commitedRegions []*rpc.Pair
+	for k, v := range v.Meta.CommitedRegions {
+		pair := &rpc.Pair{
+			Key:   int32(k),
+			Value: v,
+		}
+		commitedRegions = append(commitedRegions, pair)
+	}
+	return &rpc.Event{Id: key,
+		ActionName: v.ActionName,
+		Data:       string(v.Data), Meta: &rpc.Meta{
+			Version:         int32(v.Meta.Version),
+			SourceRegion:    int32(v.Meta.SourceRegion),
+			ServiceCode:     v.Meta.SVCCode,
+			CommitedRegions: &rpc.Dictionary{Pairs: commitedRegions},
+		}}, nil
 }
 
 // Start async runs gRPC server and joins cluster
