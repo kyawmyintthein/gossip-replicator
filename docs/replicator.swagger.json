@@ -1,0 +1,120 @@
+{
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "schemes": [
+    "http",
+    "https"
+  ],
+  "swagger": "2.0",
+  "info": {
+    "title": "service.proto",
+    "version": "version not set"
+  },
+  "host": "localhost:9000",
+  "paths": {
+    "/twirp/replicator.EventReplicatorService/Get": {
+      "post": {
+        "tags": [
+          "EventReplicatorService"
+        ],
+        "operationId": "Get",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/replicatorGetEventRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/replicatorEvent"
+            }
+          }
+        }
+      }
+    },
+    "/twirp/replicator.EventReplicatorService/Put": {
+      "post": {
+        "tags": [
+          "EventReplicatorService"
+        ],
+        "operationId": "Put",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/replicatorPutEventRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/replicatorEvent"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "replicatorEvent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "$ref": "#/definitions/replicatorbytes"
+        },
+        "deleted": {
+          "type": "boolean",
+          "format": "boolean"
+        },
+        "key": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "replicatorGetEventRequest": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        }
+      }
+    },
+    "replicatorPutEventRequest": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "$ref": "#/definitions/replicatorbytes"
+        },
+        "deleted": {
+          "type": "boolean",
+          "format": "boolean"
+        },
+        "key": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    }
+  }
+}

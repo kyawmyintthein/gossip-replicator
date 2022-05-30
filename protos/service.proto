@@ -1,0 +1,26 @@
+syntax = "proto3";
+package replicator;
+option go_package="./rpc";
+
+service EventReplicatorService {
+  rpc Put(PutEventRequest) returns (Event);
+  rpc Get(GetEventRequest) returns (Event);
+}
+
+message PutEventRequest {
+    string key = 1;
+    string data = 2;
+    int32 version = 3;
+    bool deleted = 4;
+}
+
+message GetEventRequest {
+    string key = 1;
+}
+
+message Event {
+    string key = 1;
+    string data = 2;
+    int32 version = 3;
+    bool deleted = 4;
+}
